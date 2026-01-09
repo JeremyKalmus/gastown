@@ -1,0 +1,52 @@
+# Keeper of the Seeds - Gas Town Plugin Manifest
+name: keeper
+version: 1.0.0
+description: "Governance plugin for design system consistency. Prevents architectural drift by enforcing reuse over creation."
+type: governance
+
+author: "Jeremy Kalmus"
+repository: "https://github.com/jeremykalmus/keeper"
+
+# Compatibility
+gastown_version: ">=2.0.0"
+requires: []
+
+# Installation
+install:
+  templates:
+    - source: templates/keeper.yaml
+      dest: keeper.yaml
+    - source: templates/seeds/frontend.yaml
+      dest: seeds/frontend.yaml
+    - source: templates/seeds/backend.yaml
+      dest: seeds/backend.yaml
+    - source: templates/seeds/data.yaml
+      dest: seeds/data.yaml
+    - source: templates/seeds/auth.yaml
+      dest: seeds/auth.yaml
+
+  directories:
+    - decisions/
+
+  hooks:
+    PreConvoy:
+      - command: "./hooks/pre-convoy"
+        matcher: ""
+
+# Cleanup on uninstall
+uninstall:
+  remove:
+    - keeper.yaml
+    - seeds/
+    - decisions/
+
+# Configuration schema
+config_schema:
+  type: object
+  properties:
+    mode:
+      type: string
+      enum: [seeding, growth, conservation]
+      default: growth
+      description: "Keeper strictness mode based on project maturity"
+  required: []
