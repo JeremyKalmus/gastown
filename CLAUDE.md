@@ -225,3 +225,123 @@ approvals allowed it.
 You are the last line of defense against entropy.
 
 Guard the seeds.
+
+---
+
+## Mayor Integration
+
+When the Keeper plugin is installed, the Mayor gains Keeper-aware workflow capabilities.
+
+### When Mayor Invokes Keeper Review
+
+The Mayor MUST invoke Keeper review before creating beads when:
+
+1. **Spec contains proposed components** - Any spec proposing new UI components,
+   API routes, data types, or auth patterns
+2. **Feature touches existing seeds** - Changes to patterns in the Seed Vault
+3. **Cross-rig architectural decisions** - Patterns that affect multiple rigs
+
+### Spec → Keeper → Beads Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        KEEPER-AWARE DISPATCH FLOW                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. Mayor receives spec        (e.g., docs/spec-journey-visibility.md)     │
+│                                                                             │
+│  2. Mayor reads rig's Keeper   (<rig>/keeper/keeper.yaml → mode)           │
+│     config and Seed Vault      (<rig>/keeper/seeds/*.yaml)                 │
+│                                                                             │
+│  3. Mayor applies Keeper       For each proposed component:                │
+│     decision matrices          - Check if exists → reuse                   │
+│                                - Check if extension → extend               │
+│                                - Check if new seed → gate by mode          │
+│                                                                             │
+│  4. Mayor produces ADR         <rig>/keeper/decisions/NNN-<name>.md        │
+│     with keeper_decision                                                   │
+│                                                                             │
+│  5. On APPROVAL:               Create beads with:                          │
+│     - Reference ADR in bead description                                    │
+│     - Note approved components and constraints                             │
+│     - Update seeds/*.yaml with approved patterns                           │
+│                                                                             │
+│  6. On REJECTION:              Report to requestor                         │
+│     - Do NOT create beads for rejected components                          │
+│     - Request spec modifications                                           │
+│     - May create beads for approved subset                                 │
+│                                                                             │
+│  7. Dispatch convoy            `gt sling` to polecats                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Bead Description Format
+
+When creating beads after Keeper approval:
+
+```markdown
+## <Task Title>
+
+<Task description>
+
+### Keeper Approval
+- **ADR**: keeper/decisions/003-phase2-components.md
+- **Approved components**: JourneyTracker, CostSparkline
+- **Constraints**: Must use DS2 colors, max 5 stages
+
+### Spec Reference
+- docs/spec-journey-visibility.md (Section 2.1)
+```
+
+### Finding the Seed Vault
+
+The Mayor locates Keeper configuration per-rig:
+
+```
+<rig>/keeper/
+├── keeper.yaml           # Mode: seeding|growth|conservation
+├── seeds/
+│   ├── frontend.yaml     # UI components, hooks
+│   ├── backend.yaml      # API routes, services
+│   ├── data.yaml         # Types, enums, schemas
+│   └── auth.yaml         # Auth patterns
+└── decisions/            # ADRs (immutable)
+```
+
+If `<rig>/keeper/` doesn't exist, the rig hasn't run its **Founding Convoy**.
+Mayor should prompt: "Rig needs Keeper setup. Run Founding Convoy first?"
+
+### Mode-Aware Behavior
+
+| Keeper Mode | Mayor Behavior |
+|-------------|----------------|
+| **seeding** | Allow new seeds freely, create ADR for record |
+| **growth** | Gate new seeds, require justification |
+| **conservation** | Reject most new seeds, suggest alternatives |
+
+### Commands for Mayor
+
+```bash
+# Check if rig has Keeper
+ls <rig>/keeper/keeper.yaml
+
+# Read current mode
+cat <rig>/keeper/keeper.yaml | grep mode
+
+# Review seed vault before dispatch
+cat <rig>/keeper/seeds/frontend.yaml
+cat <rig>/keeper/seeds/backend.yaml
+
+# After Keeper review, create beads
+bd create --title="..." --body="..." --type=task
+```
+
+### The Contract
+
+**Polecats trust Keeper decisions.** When a polecat receives a bead with Keeper
+approval, they implement exactly what was approved - no more, no less. Forbidden
+patterns in the ADR are hard constraints.
+
+**Mayor enforces the gate.** No beads for unapproved components. No bypassing
+Keeper review. The Mayor is accountable for ensuring convoys respect the Seed Vault.
