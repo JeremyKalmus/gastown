@@ -1,0 +1,229 @@
+#!/bin/bash
+# hooks/pre-bead-create - Pre-bead-create GATE for Keeper of the Seeds
+#
+# This hook validates proposed beads BEFORE creation and can REJECT them.
+# If a bead title matches an existing seed, creation is blocked.
+#
+# Environment variables:
+#   BD_BEAD_TITLE       - Proposed title of the bead
+#   BD_BEAD_DESCRIPTION - Proposed description (may be empty)
+#   BD_BEAD_TYPE        - Type of bead (task, bug, feature)
+#   GT_RIG_ROOT         - Path to the rig root directory
+#   GT_TOWN_ROOT        - Path to the town root directory
+#
+# Exit codes:
+#   0 - ALLOW: Bead creation may proceed
+#   1 - REJECT: Bead creation blocked (message on stderr)
+#
+# The Keeper of the Seeds guards the gate.
+
+set -euo pipefail
+
+# Configuration - check rig-level first, then town-level
+if [[ -d "${GT_RIG_ROOT:-$(pwd)}/seeds" ]]; then
+    SEEDS_DIR="${GT_RIG_ROOT:-$(pwd)}/seeds"
+elif [[ -d "${GT_TOWN_ROOT:-$(pwd)}/seeds" ]]; then
+    SEEDS_DIR="${GT_TOWN_ROOT:-$(pwd)}/seeds"
+else
+    SEEDS_DIR="${GT_RIG_ROOT:-$(pwd)}/seeds"
+fi
+
+if [[ -f "${GT_RIG_ROOT:-$(pwd)}/keeper.yaml" ]]; then
+    KEEPER_CONFIG="${GT_RIG_ROOT:-$(pwd)}/keeper.yaml"
+elif [[ -f "${GT_TOWN_ROOT:-$(pwd)}/keeper.yaml" ]]; then
+    KEEPER_CONFIG="${GT_TOWN_ROOT:-$(pwd)}/keeper.yaml"
+else
+    KEEPER_CONFIG="${GT_RIG_ROOT:-$(pwd)}/keeper.yaml"
+fi
+
+# Colors
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Check if keeper is enabled
+check_keeper_enabled() {
+    [[ -f "$KEEPER_CONFIG" ]]
+}
+
+# Get keeper mode
+get_keeper_mode() {
+    if [[ -f "$KEEPER_CONFIG" ]]; then
+        local mode
+        mode=$(grep -E '^\s*mode:\s*' "$KEEPER_CONFIG" 2>/dev/null | head -1 | sed 's/.*mode:\s*//' | tr -d '[:space:]"'"'" | tr '[:upper:]' '[:lower:]')
+        echo "${mode:-growth}"
+    else
+        echo "growth"
+    fi
+}
+
+# Extract keywords from text
+extract_keywords() {
+    local text="$1"
+    echo "$text" | tr '[:upper:]' '[:lower:]' | \
+        tr -cs '[:alnum:]' '\n' | \
+        grep -vE '^(the|a|an|to|for|of|in|on|is|are|and|or|with|that|this|it|as|be|at|by|create|add|implement|build|make|new|update|fix)$' | \
+        sort -u
+}
+
+# Check if title suggests creating a new component
+is_creation_intent() {
+    local title="$1"
+    local lower_title=$(echo "$title" | tr '[:upper:]' '[:lower:]')
+
+    # Patterns that suggest creating something new
+    if echo "$lower_title" | grep -qE '(^create |^add |^implement |^build |^make |^new |component|widget|hook|util|helper|service)'; then
+        return 0
+    fi
+    return 1
+}
+
+# Search seeds for matching components
+find_matching_seeds() {
+    local title="$1"
+    local matches=""
+
+    # Extract potential component names from title
+    # Look for PascalCase words or words after "Create/Add/etc"
+    local component_names=$(echo "$title" | grep -oE '[A-Z][a-zA-Z]+' | sort -u)
+
+    # Also extract keywords
+    local keywords=$(extract_keywords "$title")
+
+    for seed_file in "$SEEDS_DIR"/*.yaml; do
+        [[ -f "$seed_file" ]] || continue
+        local seed_type=$(basename "$seed_file" .yaml)
+
+        # Check each potential component name
+        for comp in $component_names; do
+            # Look for exact or partial match in seed file
+            if grep -qiE "^\s{2}${comp}:|${comp}Component:|${comp}Button:|${comp}Card:|${comp}Panel:|${comp}View:" "$seed_file" 2>/dev/null; then
+                local seed_entry=$(grep -iE "^\s{2}[A-Za-z]*${comp}[A-Za-z]*:" "$seed_file" 2>/dev/null | head -1 | sed 's/:.*//' | tr -d ' ')
+                if [[ -n "$seed_entry" ]]; then
+                    matches="${matches}${seed_type}:${seed_entry}\n"
+                fi
+            fi
+        done
+
+        # Check keywords against seed entries
+        for kw in $keywords; do
+            [[ ${#kw} -lt 4 ]] && continue  # Skip short keywords
+            if grep -qiE "^\s{2}[A-Za-z]*${kw}[A-Za-z]*:" "$seed_file" 2>/dev/null; then
+                local seed_entry=$(grep -iE "^\s{2}[A-Za-z]*${kw}[A-Za-z]*:" "$seed_file" 2>/dev/null | head -1 | sed 's/:.*//' | tr -d ' ')
+                if [[ -n "$seed_entry" ]]; then
+                    matches="${matches}${seed_type}:${seed_entry}\n"
+                fi
+            fi
+        done
+    done
+
+    # Deduplicate and return
+    echo -e "$matches" | sort -u | grep -v '^$'
+}
+
+# Get seed details
+get_seed_info() {
+    local seed_type="$1"
+    local seed_name="$2"
+    local seed_file="$SEEDS_DIR/${seed_type}.yaml"
+
+    if [[ -f "$seed_file" ]]; then
+        # Extract the seed entry and its properties
+        awk "/^  ${seed_name}:/{found=1; next} found && /^  [A-Z]/{exit} found{print}" "$seed_file" 2>/dev/null | head -10
+    fi
+}
+
+reject_bead() {
+    local reason="$1"
+    local suggestion="$2"
+
+    echo -e "${RED}${BOLD}❌ KEEPER GATE: Bead Creation Blocked${NC}" >&2
+    echo -e "" >&2
+    echo -e "${RED}Reason:${NC} $reason" >&2
+    echo -e "" >&2
+    echo -e "${CYAN}${BOLD}Suggestion:${NC}" >&2
+    echo -e "$suggestion" >&2
+    echo -e "" >&2
+    echo -e "${YELLOW}To proceed anyway, you must:${NC}" >&2
+    echo -e "  1. File a keeper decision request explaining why a new pattern is needed" >&2
+    echo -e "  2. Get approval from the Keeper (human review)" >&2
+    echo -e "  3. Use: BD_KEEPER_OVERRIDE=1 bd create ..." >&2
+    echo -e "" >&2
+
+    exit 1
+}
+
+allow_bead() {
+    # Silent allow - just exit 0
+    exit 0
+}
+
+main() {
+    local title="${BD_BEAD_TITLE:-}"
+    local description="${BD_BEAD_DESCRIPTION:-}"
+    local bead_type="${BD_BEAD_TYPE:-task}"
+
+    # Skip if no title
+    if [[ -z "$title" ]]; then
+        allow_bead
+    fi
+
+    # Skip if keeper not configured
+    if ! check_keeper_enabled; then
+        allow_bead
+    fi
+
+    # Skip if override flag set
+    if [[ "${BD_KEEPER_OVERRIDE:-}" == "1" ]]; then
+        echo -e "${YELLOW}⚠️  Keeper override active - skipping gate${NC}" >&2
+        allow_bead
+    fi
+
+    local keeper_mode=$(get_keeper_mode)
+
+    # In seeding mode, allow everything (early project phase)
+    if [[ "$keeper_mode" == "seeding" ]]; then
+        allow_bead
+    fi
+
+    # Check if this looks like creating a new component/pattern
+    if ! is_creation_intent "$title"; then
+        # Not a creation task (bug fix, research, etc) - allow
+        allow_bead
+    fi
+
+    # Find matching seeds
+    local matches=$(find_matching_seeds "$title")
+
+    if [[ -n "$matches" ]]; then
+        # Found matching seeds - REJECT in conservation mode, WARN in growth mode
+        local match_list=""
+        while IFS= read -r match; do
+            [[ -z "$match" ]] && continue
+            local seed_type="${match%%:*}"
+            local seed_name="${match#*:}"
+            match_list="${match_list}  • ${BOLD}${seed_name}${NC} (seeds/${seed_type}.yaml)\n"
+        done <<< "$matches"
+
+        if [[ "$keeper_mode" == "conservation" ]]; then
+            # Hard reject in conservation mode
+            reject_bead \
+                "Existing seed(s) found that match your proposed component" \
+                "$(echo -e "Use existing seed instead:\n${match_list}\nIf these don't meet your needs, file a decision request to extend or create new.")"
+        else
+            # Growth mode - warn but allow (for now, make it a gate too)
+            # Actually, user wants hard gate, so reject in growth mode too
+            reject_bead \
+                "Existing seed(s) found that match your proposed component" \
+                "$(echo -e "Use existing seed instead:\n${match_list}\nKeeper mode is '${keeper_mode}'. Reuse existing patterns before creating new ones.")"
+        fi
+    fi
+
+    # No matching seeds found - allow creation
+    allow_bead
+}
+
+main "$@"
