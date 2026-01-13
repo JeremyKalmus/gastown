@@ -217,22 +217,25 @@ EOF
     print_success "Created keeper.yaml (mode: $MODE)"
 fi
 
-# Step 4: Install Mayor slash commands
+# Step 4: Install Mayor slash commands and enforcement hook
 if [[ "$SKIP_MAYOR" != true ]]; then
     print_info "Installing Mayor slash commands..."
 
-    # Find Mayor's .claude/commands directory
+    # Find Mayor's .claude directory
+    MAYOR_CLAUDE=""
     MAYOR_COMMANDS=""
 
     # Check for town-level mayor
     TOWN_ROOT="$(dirname "$RIG_PATH")"
     if [[ -d "$TOWN_ROOT/mayor/.claude" ]]; then
-        MAYOR_COMMANDS="$TOWN_ROOT/mayor/.claude/commands"
+        MAYOR_CLAUDE="$TOWN_ROOT/mayor/.claude"
+        MAYOR_COMMANDS="$MAYOR_CLAUDE/commands"
     fi
 
     # Check for rig-level mayor
     if [[ -d "$RIG_PATH/mayor/rig/.claude" ]]; then
-        MAYOR_COMMANDS="$RIG_PATH/mayor/rig/.claude/commands"
+        MAYOR_CLAUDE="$RIG_PATH/mayor/rig/.claude"
+        MAYOR_COMMANDS="$MAYOR_CLAUDE/commands"
     fi
 
     if [[ -n "$MAYOR_COMMANDS" ]]; then
@@ -241,6 +244,67 @@ if [[ "$SKIP_MAYOR" != true ]]; then
         print_success "Installed /keeper-review to Mayor"
     else
         print_warning "Mayor .claude directory not found, skipping Mayor commands"
+    fi
+
+    # Install the enforcement hook (PreToolUse)
+    if [[ -n "$MAYOR_CLAUDE" ]]; then
+        print_info "Installing Keeper enforcement hook..."
+
+        # Copy the hook script
+        mkdir -p "$RIG_PATH/keeper/hooks"
+        cp "$SCRIPT_DIR/hooks/keeper-gate.sh" "$RIG_PATH/keeper/hooks/"
+        chmod +x "$RIG_PATH/keeper/hooks/keeper-gate.sh"
+
+        # Add PreToolUse hook to Mayor's settings.json
+        MAYOR_SETTINGS="$MAYOR_CLAUDE/settings.json"
+        HOOK_CMD="$RIG_PATH/keeper/hooks/keeper-gate.sh"
+
+        if [[ -f "$MAYOR_SETTINGS" ]]; then
+            # Check if jq is available
+            if command -v jq &> /dev/null; then
+                # Check if PreToolUse hook already exists for keeper
+                if ! grep -q "keeper-gate.sh" "$MAYOR_SETTINGS" 2>/dev/null; then
+                    # Add the hook using jq
+                    TEMP_FILE=$(mktemp)
+                    jq --arg cmd "$HOOK_CMD" '
+                        .hooks.PreToolUse = (.hooks.PreToolUse // []) + [{
+                            "matcher": "Bash",
+                            "hooks": [{
+                                "type": "command",
+                                "command": $cmd
+                            }]
+                        }]
+                    ' "$MAYOR_SETTINGS" > "$TEMP_FILE" && mv "$TEMP_FILE" "$MAYOR_SETTINGS"
+                    print_success "Added Keeper enforcement hook to Mayor"
+                else
+                    print_warning "Keeper hook already in Mayor settings"
+                fi
+            else
+                print_warning "jq not found - manual hook setup required"
+                print_warning "Add PreToolUse hook to $MAYOR_SETTINGS:"
+                echo "  Command: $HOOK_CMD"
+            fi
+        else
+            # Create new settings.json with the hook
+            cat > "$MAYOR_SETTINGS" << HOOKEOF
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOOK_CMD"
+          }
+        ]
+      }
+    ]
+  }
+}
+HOOKEOF
+            print_success "Created Mayor settings.json with Keeper hook"
+        fi
     fi
 fi
 
@@ -346,6 +410,8 @@ echo "  │   ├── backend.yaml   # API routes registry"
 echo "  │   ├── data.yaml      # Schema registry"
 echo "  │   └── auth.yaml      # Auth patterns registry"
 echo "  ├── decisions/         # ADR storage"
+echo "  ├── hooks/"
+echo "  │   └── keeper-gate.sh # Enforcement hook (blocks unauthorized beads)"
 echo "  └── KEEPER-INSTRUCTIONS.md"
 echo ""
 echo "Next steps:"
@@ -356,4 +422,8 @@ echo ""
 echo "Commands available:"
 echo "  /keeper-review <spec>     # Mayor: review spec before creating beads"
 echo "  /keeper-validate <adr>    # Refinery: validate changes before merge"
+echo ""
+echo -e "${YELLOW}ENFORCEMENT ACTIVE:${NC}"
+echo "  Mayor cannot run 'bd create' or 'gt convoy create' without"
+echo "  an approved keeper_decision in keeper/decisions/"
 echo ""
