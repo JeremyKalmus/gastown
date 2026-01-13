@@ -1,0 +1,74 @@
+# Backend Seed Registry
+# Machine-readable registry of approved API routes and services
+# Keeper uses this to enforce REST consistency and service boundaries
+
+api_routes:
+  # Example route entry:
+  # METHOD /path/:param:
+  #   purpose: "What this endpoint does"
+  #   auth_required: true|false
+  #   scopes: [list, of, required, scopes]  # if auth_required
+
+  POST /auth/login:
+    purpose: "User authentication"
+    auth_required: false
+
+  POST /auth/logout:
+    purpose: "Session termination"
+    auth_required: true
+    scopes: []
+
+  POST /auth/refresh:
+    purpose: "Token refresh"
+    auth_required: false
+
+  GET /users/:id:
+    purpose: "User profile retrieval"
+    auth_required: true
+    scopes: [user:read]
+
+  PATCH /users/:id:
+    purpose: "User profile update"
+    auth_required: true
+    scopes: [user:write]
+
+  GET /users:
+    purpose: "User list with pagination"
+    auth_required: true
+    scopes: [admin:read]
+
+services:
+  # Example service entry:
+  # ServiceName:
+  #   responsibilities:
+  #     - list of things this service owns
+  #   forbidden:
+  #     - list of things this service must NOT do
+
+  AuthService:
+    responsibilities:
+      - token issuance
+      - token validation
+      - token refresh
+      - session management
+    forbidden:
+      - user creation
+      - password storage (delegate to CredentialService)
+
+  UserService:
+    responsibilities:
+      - user CRUD operations
+      - profile management
+      - user preferences
+    forbidden:
+      - authentication logic
+      - authorization decisions
+
+  CredentialService:
+    responsibilities:
+      - password hashing
+      - password verification
+      - credential storage
+    forbidden:
+      - token operations
+      - session management

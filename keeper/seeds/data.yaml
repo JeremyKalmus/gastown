@@ -1,0 +1,66 @@
+# Data Seed Registry
+# Machine-readable registry of approved enums and table schemas
+# Keeper uses this to enforce schema consistency and safe migrations
+
+enums:
+  # Example enum entry:
+  # enum_name:
+  #   values: [list, of, allowed, values]
+  #   extension_policy: append-only|frozen|controlled
+  #   scope: global|table:tablename
+
+  user_status:
+    values: [active, suspended, deleted]
+    extension_policy: append-only
+    scope: global
+
+  role_type:
+    values: [admin, user, guest]
+    extension_policy: controlled
+    scope: global
+
+  audit_action:
+    values: [create, read, update, delete]
+    extension_policy: frozen
+    scope: table:audit_logs
+
+  notification_channel:
+    values: [email, sms, push]
+    extension_policy: append-only
+    scope: table:notifications
+
+tables:
+  # Example table entry:
+  # table_name:
+  #   primary_key: column_name
+  #   enum_fields:
+  #     - field_name: enum_name
+  #   indexes: [list, of, indexed, columns]
+  #   constraints: [list of constraint descriptions]
+
+  users:
+    primary_key: id
+    enum_fields:
+      - status: user_status
+      - role: role_type
+    indexes: [email, created_at]
+    constraints:
+      - email must be unique
+      - soft delete only (status -> deleted)
+
+  audit_logs:
+    primary_key: id
+    enum_fields:
+      - action: audit_action
+    indexes: [user_id, created_at, action]
+    constraints:
+      - immutable after creation
+      - retention: 90 days
+
+  notifications:
+    primary_key: id
+    enum_fields:
+      - channel: notification_channel
+    indexes: [user_id, sent_at, channel]
+    constraints:
+      - cascade delete with user

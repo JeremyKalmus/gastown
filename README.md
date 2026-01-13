@@ -4,7 +4,10 @@ Governance plugin for Gas Town that prevents architectural drift by enforcing re
 
 ## What It Does
 
-The Keeper acts as a hard gate: **convoys do not launch without Keeper approval**.
+The Keeper operates as a **dual-gate system**:
+
+1. **Front Gate (Mayor)**: Reviews specs before work is assigned to polecats
+2. **Back Gate (Refinery)**: Validates polecat changes before merge
 
 For every feature, the Keeper answers four questions:
 1. **What already exists?** - Scans the seed vault for applicable patterns
@@ -16,54 +19,128 @@ This transforms architecture from culture into infrastructure.
 
 ## Installation
 
-### 1. Copy Templates to Your Rig
+### Quick Install (Recommended)
 
 ```bash
-# From your rig root
-cp -r templates/keeper.yaml ./keeper.yaml
-cp -r templates/seeds ./seeds
-mkdir -p decisions
+# Install on a rig with default settings (growth mode)
+./install/install-keeper.sh ~/gt/myproject
+
+# Install on a new project (seeding mode - more permissive)
+./install/install-keeper.sh --mode seeding ~/gt/newproject
+
+# Install on a mature project (conservation mode - strict)
+./install/install-keeper.sh --mode conservation ~/gt/stable
 ```
 
-### 2. Configure keeper.yaml
-
-Edit `keeper.yaml` to set your mode based on project maturity:
-
-```yaml
-keeper:
-  mode: seeding    # Early project: allows new seeds freely
-  # mode: growth   # Default: reuse-first, extensions preferred
-  # mode: conservation  # Mature: new seeds almost always rejected
-```
-
-### 3. Populate Your Seed Vault
-
-Edit the files in `seeds/` to document your project's existing patterns:
-
-- `seeds/frontend.yaml` - UI components
-- `seeds/backend.yaml` - API routes and services
-- `seeds/data.yaml` - Database schemas and enums
-- `seeds/auth.yaml` - Authentication patterns
-
-### Directory Structure
+### What Gets Installed
 
 ```
-/rigs/<rig-name>/
-  keeper.yaml       # Configuration
-  seeds/            # The Seed Vault
-    frontend.yaml
-    backend.yaml
-    data.yaml
-    auth.yaml
-  decisions/        # Immutable Keeper decisions
+<rig>/
+├── keeper/
+│   ├── keeper.yaml           # Configuration
+│   ├── seeds/
+│   │   ├── frontend.yaml     # UI component registry
+│   │   ├── backend.yaml      # API routes registry
+│   │   ├── data.yaml         # Schema registry
+│   │   └── auth.yaml         # Auth patterns registry
+│   ├── decisions/            # ADR storage
+│   └── KEEPER-INSTRUCTIONS.md
+└── .claude/commands/
+    ├── keeper-review.md      # For Mayor
+    └── keeper-validate.md    # For Refinery
 ```
+
+### Uninstall
+
+```bash
+./install/uninstall-keeper.sh ~/gt/myproject
+./install/uninstall-keeper.sh --keep-decisions ~/gt/myproject  # Preserve ADRs
+```
+
+## Mayor Integration
+
+**IMPORTANT**: The Mayor must run `/keeper-review` before creating beads for any feature work.
+
+### Mayor Workflow
+
+```
+1. Receive feature spec/request
+2. Run: /keeper-review <spec-file>
+3. Wait for APPROVED status
+4. Create beads with ADR reference:
+   - Include "Keeper ADR: NNN" in description
+   - Include constraints from keeper_decision
+5. Sling to polecats
+```
+
+### Example Mayor Session
+
+```
+User: "Add a notification system to alert users when tasks complete"
+
+Mayor: Let me review this against the Keeper first.
+
+> /keeper-review notification-spec.md
+
+KEEPER DECISION: APPROVED WITH CONDITIONS
+- Reuse: notifications table (exists), Button component
+- Extensions: Button notification variant
+- Conditions: NotificationToast needs justification
+- Forbidden: New auth services
+
+Mayor: Creating beads with Keeper constraints...
+
+> bd create --title="Add notification status field" \
+    --body="Keeper ADR: 001. MUST use existing notifications table."
+```
+
+## Refinery Integration
+
+The Refinery must run `/keeper-validate` before merging any polecat PR.
+
+### Refinery Workflow
+
+```
+1. Polecat submits PR
+2. Run: /keeper-validate <adr-id>
+3. If APPROVED → merge
+4. If REJECTED → return to polecat with violations
+```
+
+### Example Validation
+
+```
+> /keeper-validate 001
+
+KEEPER VALIDATION: REJECTED
+
+Violations: 2
+
+1. [FORBIDDEN] NotificationToast.tsx created
+   - Was in CONDITIONS, not APPROVED
+
+2. [CONSTRAINT] Enum has unapproved value 'archived'
+   - Approved: [unread, read, dismissed]
+   - Found: [unread, read, dismissed, archived]
+
+Polecat must revise and resubmit.
+```
+
+## Keeper Modes
+
+Set in `keeper/keeper.yaml`:
+
+| Mode | When to Use | Behavior |
+|------|-------------|----------|
+| `seeding` | New project | Allows new seeds freely, warns instead of blocks |
+| `growth` | Default | Reuse-first, extensions preferred, new seeds gated |
+| `conservation` | Mature project | New seeds almost always rejected |
 
 ## Seed Vault Format
 
-The seed vault is a machine-readable registry. Polecats don't interpret it—the Keeper does.
+The seed vault is a machine-readable registry in `keeper/seeds/`:
 
-### Frontend Seeds (frontend.yaml)
-
+### frontend.yaml
 ```yaml
 components:
   Button:
@@ -72,17 +149,11 @@ components:
     when_to_use: "Any clickable action"
     forbidden_extensions:
       - custom colors outside design system
-      - inline styles
 ```
 
-### Backend Seeds (backend.yaml)
-
+### backend.yaml
 ```yaml
 api_routes:
-  POST /auth/login:
-    purpose: "User authentication"
-    auth_required: false
-
   GET /users/:id:
     purpose: "User profile retrieval"
     auth_required: true
@@ -90,223 +161,77 @@ api_routes:
 
 services:
   AuthService:
-    responsibilities:
-      - token issuance
-      - token validation
-    forbidden:
-      - user creation
+    responsibilities: [token issuance, token validation]
+    forbidden: [user creation]
 ```
 
-### Data Seeds (data.yaml)
-
+### data.yaml
 ```yaml
 enums:
   user_status:
     values: [active, suspended, deleted]
-    extension_policy: append-only    # append-only|frozen|controlled
-    scope: global                    # global|table:tablename
-
-tables:
-  users:
-    primary_key: id
-    enum_fields:
-      - status: user_status
-    indexes: [email, created_at]
-    constraints:
-      - email must be unique
+    extension_policy: append-only
+    scope: global
 ```
 
-### Auth Seeds (auth.yaml)
-
+### auth.yaml
 ```yaml
 auth_model:
   type: jwt
-  token_types: [access, refresh]
   forbidden_patterns:
     - localStorage for tokens
     - tokens in URL params
 
 scopes:
   user:read:
-    description: "Read own user profile"
     granted_to: [user, admin]
-
-  admin:read:
-    implies: [user:read]
-    granted_to: [admin]
 ```
 
 ## Decision Matrix
 
-The Keeper uses a deterministic matrix—not opinions.
+The Keeper uses deterministic matrices:
 
-### Frontend Components
-
+### Frontend
 | Question | Yes | No |
 |----------|-----|-----|
 | Component exists? | Use it | Continue |
-| Variant fits use case? | Use variant | Extend variant |
-| Extension breaks design system? | **Reject** | Approve |
-| Extension reused ≥2 times? | Promote to core | Local only |
+| Variant fits? | Use variant | Extend |
+| Breaks design system? | **REJECT** | Approve |
 
-### API Routes
-
+### Backend
 | Question | Yes | No |
 |----------|-----|-----|
-| Route exists with same resource? | Extend | Continue |
-| Extension is backward-compatible? | Modify | New route |
-| New route matches REST shape? | Approve | **Reject** |
-| Auth model consistent? | Proceed | Fix auth |
+| Route exists? | Extend | Continue |
+| Backward-compatible? | Modify | New route |
+| Matches REST? | Approve | **REJECT** |
 
-### Database Enums/Fields
-
+### Data
 | Question | Yes | No |
 |----------|-----|-----|
 | Enum exists? | Extend | Continue |
-| Extension append-only? | OK | **Reject** |
-| New enum scoped to one table? | Approve | Global enum |
-| Requires migration? | Generate plan | **Block** |
+| Append-only? | OK | **REJECT** |
 
-### Auth/Identity
-
+### Auth
 | Question | Yes | No |
 |----------|-----|-----|
-| Auth service exists? | Use it | **Block** |
-| New permission required? | Add scope | Reject new role |
-| Token shape consistent? | Proceed | **Reject** |
+| Auth service exists? | Use it | **BLOCK** |
 
-## Keeper Modes
+## Commands
 
-The mode determines strictness. Set in `keeper.yaml`:
-
-### Seeding Mode (early project)
-
-```yaml
-keeper:
-  mode: seeding
-```
-
-- Allows new seeds freely
-- Still records them to the vault
-- Warns instead of blocks
-- **Use when:** Project is brand new, establishing patterns
-- **Transition after:** Founding Convoy completes, patterns stabilize
-
-### Growth Mode (default)
-
-```yaml
-keeper:
-  mode: growth
-```
-
-- Reuse-first: existing seeds must be used when applicable
-- Extension preferred over creation
-- New seeds gated: requires justification and ≥2 usage instances
-- **Use when:** Project has established patterns but is evolving
-- **Transition when:** Churn decreases, patterns stabilize
-
-### Conservation Mode (mature project)
-
-```yaml
-keeper:
-  mode: conservation
-```
-
-- New seeds almost always rejected
-- Focus on stability over new features
-- Extensions require strong justification
-- **Use when:** Project is stable, in maintenance, or preparing for handoff
-
-## Example Workflow
-
-### Scenario: Adding a "warning" button variant
-
-1. **Polecat requests feature** that needs a warning-styled button
-
-2. **Keeper checks seed vault:**
-   ```yaml
-   # seeds/frontend.yaml shows:
-   Button:
-     variants: [primary, secondary, danger]
-   ```
-
-3. **Keeper evaluates:**
-   - Component exists? ✓ Yes → Use Button
-   - Variant fits? ✗ No "warning" variant
-   - Would extension break design system? No
-   - Has "warning" been needed elsewhere? Checking...
-
-4. **Keeper outputs decision:**
-   ```yaml
-   keeper_decision:
-     status: approved
-     reuse:
-       frontend:
-         - Button
-     extensions:
-       frontend:
-         Button:
-           add_variant: "warning"
-     forbidden:
-       - new button implementations
-   ```
-
-5. **Decision becomes immutable input** for the convoy. If polecat creates a new `WarningButton` component instead of extending `Button`, the output is rejected automatically.
-
-### Scenario: Rejected request
-
-1. **Polecat wants new auth service** for social login
-
-2. **Keeper checks:**
-   ```yaml
-   # seeds/auth.yaml shows AuthService exists
-   ```
-
-3. **Decision matrix (Auth D):**
-   - Auth service exists? ✓ Yes → Use it
-
-4. **Keeper output:**
-   ```yaml
-   keeper_decision:
-     status: rejected
-     reason: "Auth service exists. Extend AuthService to support social providers."
-     forbidden:
-       - new auth services
-   ```
+| Command | Who | When |
+|---------|-----|------|
+| `/keeper-review <spec>` | Mayor | Before creating beads |
+| `/keeper-validate <adr>` | Refinery | Before merging PR |
 
 ## Key Principles
 
-From the Keeper prompt (spec section 5):
-
-- "Prefer reuse over extension."
-- "Prefer extension over creation."
-- "Reject if uncertain."
-- "You are accountable for long-term system coherence."
+- **Prefer reuse over extension**
+- **Prefer extension over creation**
+- **Reject if uncertain**
+- A pattern must appear **twice** as an extension before promotion to seed
 
 The Keeper is not a "helpful" agent. It is a **librarian with veto power**.
-
-## Adding New Seeds (Controlled Evolution)
-
-### Path 1: Emergence (preferred)
-
-A pattern must appear at least twice as an extension before promotion:
-
-1. Feature A extends existing pattern
-2. Feature B extends same pattern
-3. Keeper promotes extension → new seed
-
-This prevents speculative abstractions.
-
-### Path 2: Explicit Proposal (rare)
-
-For foundational changes (new auth model, new data paradigm):
-
-- Requires Seed Proposal Convoy
-- Must include justification, migration plan, rollback strategy
-- Default outcome: rejection
 
 ## The Rule
 
 > **No Keeper, no convoy. No seeds, no Keeper.**
-
-That ordering matters.

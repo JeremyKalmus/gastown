@@ -1,0 +1,87 @@
+keeper_decision:
+  id: ADR-001
+  date: "2026-01-13"
+  spec: "test-spec.md"
+  mode: growth
+  status: approved_with_conditions
+
+  reuse:
+    frontend:
+      - Button (extend with notification variant)
+      - Modal (consider for toast-like behavior)
+    backend: []
+    data:
+      - notifications table (already exists in seeds!)
+      - notification_channel enum (existing)
+
+  extensions:
+    frontend:
+      Button:
+        add_variant: "notification"
+    data:
+      notifications:
+        add_field: "status"
+        add_enum: "notification_status"
+
+  new_seeds:
+    - type: enum
+      name: notification_status
+      values: [unread, read, dismissed]
+      scope: table:notifications
+      justification: "Required for tracking notification state, append-only policy"
+
+    - type: route
+      name: POST /api/notifications
+      justification: "CRUD for new notification feature"
+
+    - type: route
+      name: GET /api/notifications
+      justification: "CRUD for new notification feature"
+
+    - type: scope
+      name: notifications:read
+      justification: "Follows existing resource:action pattern"
+
+    - type: scope
+      name: notifications:write
+      justification: "Follows existing resource:action pattern"
+
+  conditions:
+    - component: NotificationToast
+      status: needs_justification
+      question: "Can this use Modal with 'toast' variant instead of new component?"
+      alternative: "Extend Modal with toast variant, or justify why new component needed"
+
+    - component: NotificationBell
+      status: needs_justification
+      question: "Is this a component or just an icon? Can existing icon system handle it?"
+      alternative: "Add to icon library rather than new component"
+
+    - service: NotificationService
+      status: needs_justification
+      question: "Can notification logic live in UserService or existing service?"
+      alternative: "Extend UserService with notification methods before creating new service"
+
+  forbidden:
+    - Creating new Toast component without Modal team review
+    - Creating NotificationService without service boundary justification
+    - Storing notification status outside the notifications table
+    - Custom auth patterns for notification access
+
+  constraints:
+    - MUST use existing notifications table from seeds
+    - MUST extend Button for dismiss action, not create new button
+    - MUST follow resource:action scope naming pattern
+    - notification_status enum MUST be append-only
+    - New components require 2+ usage instances before promotion to seeds
+
+  rationale: |
+    The spec proposes reasonable extensions to existing patterns, but attempts to create
+    new components (NotificationToast, NotificationBell) and a new service without
+    justifying why existing patterns are insufficient.
+
+    Key finding: The notifications table ALREADY EXISTS in data seeds - this should be
+    reused and extended rather than created fresh.
+
+    In growth mode, we approve the extensions and new scopes that follow patterns,
+    but require justification for new components and services before proceeding.

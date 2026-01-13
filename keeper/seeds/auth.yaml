@@ -1,0 +1,87 @@
+# Auth Seed Registry
+# Machine-readable registry of approved auth patterns
+# Keeper uses this to enforce consistent identity and authorization
+
+auth_model:
+  # Define the authentication strategy
+  type: jwt
+  token_types:
+    - access
+    - refresh
+  storage:
+    access: memory
+    refresh: httponly_cookie
+  expiry:
+    access: 15m
+    refresh: 7d
+  forbidden_patterns:
+    - localStorage for tokens
+    - tokens in URL params
+    - custom auth headers (use Authorization: Bearer)
+
+scopes:
+  # Example scope entry:
+  # scope_name:
+  #   description: "What this scope permits"
+  #   implies: [list, of, implied, scopes]
+  #   granted_to: [list, of, roles]
+
+  user:read:
+    description: "Read own user profile"
+    implies: []
+    granted_to: [user, admin]
+
+  user:write:
+    description: "Update own user profile"
+    implies: [user:read]
+    granted_to: [user, admin]
+
+  admin:read:
+    description: "Read any user profile"
+    implies: [user:read]
+    granted_to: [admin]
+
+  admin:write:
+    description: "Update any user profile"
+    implies: [admin:read, user:write]
+    granted_to: [admin]
+
+token_shape:
+  # Define required and optional claims
+  access:
+    required:
+      - sub: "User ID"
+      - iat: "Issued at timestamp"
+      - exp: "Expiration timestamp"
+      - scopes: "Array of granted scopes"
+    optional:
+      - jti: "Token ID for revocation"
+    forbidden:
+      - password
+      - email (use sub lookup)
+      - sensitive PII
+
+  refresh:
+    required:
+      - sub: "User ID"
+      - iat: "Issued at timestamp"
+      - exp: "Expiration timestamp"
+      - jti: "Token ID for revocation tracking"
+    optional: []
+    forbidden:
+      - scopes (derive from role at refresh time)
+      - any user data
+
+roles:
+  # Role hierarchy
+  admin:
+    inherits: [user]
+    description: "Full system access"
+
+  user:
+    inherits: [guest]
+    description: "Authenticated user"
+
+  guest:
+    inherits: []
+    description: "Unauthenticated visitor"

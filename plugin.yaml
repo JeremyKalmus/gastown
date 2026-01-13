@@ -1,52 +1,84 @@
 # Keeper of the Seeds - Gas Town Plugin Manifest
 name: keeper
-version: 1.0.0
-description: "Governance plugin for design system consistency. Prevents architectural drift by enforcing reuse over creation."
+version: 1.1.0
+description: |
+  Governance plugin for architectural consistency. Prevents drift by enforcing
+  reuse over creation through a dual-gate system:
+  - Front gate (Mayor): Reviews specs before work is assigned
+  - Back gate (Refinery): Validates changes before merge
 type: governance
 
 author: "Jeremy Kalmus"
 repository: "https://github.com/jeremykalmus/keeper"
 
 # Compatibility
-gastown_version: ">=2.0.0"
+gastown_version: ">=0.2.0"
 requires: []
 
 # Installation
 install:
-  # Run setup script first to install bd-wrapper
-  scripts:
-    - command: "./install/setup.sh"
-      description: "Install bd wrapper for PostBeadCreate hooks"
+  # Primary installation method: shell script
+  script: "./install/install-keeper.sh"
 
-  templates:
-    - source: templates/keeper.yaml
-      dest: keeper.yaml
-    - source: templates/seeds/frontend.yaml
-      dest: seeds/frontend.yaml
-    - source: templates/seeds/backend.yaml
-      dest: seeds/backend.yaml
-    - source: templates/seeds/data.yaml
-      dest: seeds/data.yaml
-    - source: templates/seeds/auth.yaml
-      dest: seeds/auth.yaml
+  # Script options
+  options:
+    mode:
+      description: "Initial Keeper mode"
+      type: string
+      enum: [seeding, growth, conservation]
+      default: growth
+    force:
+      description: "Overwrite existing files"
+      type: boolean
+      default: false
 
-  directories:
-    - decisions/
+  # What gets installed
+  creates:
+    - keeper/keeper.yaml
+    - keeper/seeds/frontend.yaml
+    - keeper/seeds/backend.yaml
+    - keeper/seeds/data.yaml
+    - keeper/seeds/auth.yaml
+    - keeper/decisions/
+    - keeper/KEEPER-INSTRUCTIONS.md
 
-  hooks:
-    PreConvoy:
-      - command: "./hooks/pre-convoy"
-        matcher: ""
-    PostBeadCreate:
-      - command: "./hooks/post-bead-create"
-        matcher: ""
+  # Slash commands installed
+  commands:
+    - source: commands/keeper-review.md
+      targets:
+        - mayor/.claude/commands/
+        - .claude/commands/
+    - source: commands/keeper-validate.md
+      targets:
+        - refinery/.claude/commands/
+        - .claude/commands/
 
-# Cleanup on uninstall
+# Uninstallation
 uninstall:
-  remove:
-    - keeper.yaml
-    - seeds/
-    - decisions/
+  script: "./install/uninstall-keeper.sh"
+  options:
+    keep-decisions:
+      description: "Preserve existing ADRs"
+      type: boolean
+      default: false
+    keep-seeds:
+      description: "Preserve seed files"
+      type: boolean
+      default: false
+
+# Slash commands provided
+commands:
+  keeper-review:
+    description: "Review spec against Seed Vault before creating beads"
+    usage: "/keeper-review <spec-file-or-description>"
+    for: [mayor, crew]
+    file: commands/keeper-review.md
+
+  keeper-validate:
+    description: "Validate polecat changes against keeper_decision before merge"
+    usage: "/keeper-validate <adr-id-or-branch>"
+    for: [refinery]
+    file: commands/keeper-validate.md
 
 # Configuration schema
 config_schema:
@@ -56,5 +88,31 @@ config_schema:
       type: string
       enum: [seeding, growth, conservation]
       default: growth
-      description: "Keeper strictness mode based on project maturity"
+      description: |
+        Keeper strictness mode based on project maturity:
+        - seeding: Early project, allows new seeds freely
+        - growth: Default, reuse-first, extensions preferred
+        - conservation: Mature project, new seeds rarely approved
   required: []
+
+# Integration architecture
+integration:
+  # Front gate: Mayor reviews before creating beads
+  front_gate:
+    when: "Before Mayor creates beads/convoy"
+    who: Mayor
+    command: "/keeper-review <spec>"
+    output: "keeper/decisions/NNN-<name>.yaml"
+    blocks_if: "status != approved"
+
+  # Back gate: Refinery validates before merge
+  back_gate:
+    when: "Before Refinery merges polecat PR"
+    who: Refinery
+    command: "/keeper-validate <adr-id>"
+    blocks_if: "violations > 0"
+
+# Documentation
+docs:
+  spec: keeper-spec.md
+  readme: README.md

@@ -1,0 +1,44 @@
+# Frontend Seed Registry
+# Machine-readable registry of approved UI components
+# Keeper uses this to enforce reuse before extension
+
+components:
+  # Example component entry:
+  # ComponentName:
+  #   variants: [list, of, approved, variants]
+  #   location: path/to/Component.tsx
+  #   when_to_use: "Description of appropriate usage"
+  #   forbidden_extensions:
+  #     - list of prohibited modifications
+
+  Button:
+    variants: [primary, secondary, danger]
+    location: src/ui/Button.tsx
+    when_to_use: "Any clickable action"
+    forbidden_extensions:
+      - custom colors outside design system
+      - inline styles
+
+  Input:
+    variants: [text, password, email, number]
+    location: src/ui/Input.tsx
+    when_to_use: "User text entry"
+    forbidden_extensions:
+      - uncontrolled inputs
+      - custom validation UI
+
+  Modal:
+    variants: [dialog, drawer, fullscreen]
+    location: src/ui/Modal.tsx
+    when_to_use: "Blocking user decisions requiring focus"
+    forbidden_extensions:
+      - nested modals
+      - auto-dismiss without user action
+
+  Card:
+    variants: [default, elevated, outlined]
+    location: src/ui/Card.tsx
+    when_to_use: "Contained content grouping"
+    forbidden_extensions:
+      - custom border styles
+      - mixed variant nesting

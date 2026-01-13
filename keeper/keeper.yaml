@@ -1,0 +1,105 @@
+# Keeper of the Seeds Configuration
+# Reference: keeper-spec.md section 13 (Keeper Modes)
+#
+# The Keeper governs architectural decisions within a rig, enforcing
+# reuse, consistency, and deliberate evolution across UI, API, data, and auth.
+# Hard gate: convoys do not launch without Keeper approval.
+
+# =============================================================================
+# MODE CONFIGURATION
+# =============================================================================
+# The Keeper operates in one of three modes, depending on project maturity.
+# Mode determines how strictly the Keeper gates new seed creation.
+
+keeper:
+  # Current mode: seeding | growth | conservation
+  mode: growth
+
+# =============================================================================
+# MODE DEFINITIONS (from keeper-spec.md section 13)
+# =============================================================================
+#
+# Choose the mode that matches your project's lifecycle stage:
+#
+# -----------------------------------------------------------------------------
+# SEEDING MODE (early project)
+# -----------------------------------------------------------------------------
+# Use when: Project is brand new, patterns are being established
+# Behavior:
+#   - Allows new seeds freely (minimal friction)
+#   - Still records all seeds to the vault
+#   - Warns instead of blocks on potential issues
+# When to transition: After Founding Convoy completes and initial
+#                     patterns are stable (usually 2-4 weeks)
+#
+# keeper:
+#   mode: seeding
+#
+# -----------------------------------------------------------------------------
+# GROWTH MODE (default)
+# -----------------------------------------------------------------------------
+# Use when: Project has established patterns but is actively evolving
+# Behavior:
+#   - Reuse-first: existing seeds must be used when applicable
+#   - Extension preferred: extend existing seeds before creating new
+#   - New seeds gated: requires justification and 2+ usage instances
+# When to transition: When churn decreases and patterns stabilize,
+#                     typically before major release or handoff
+#
+# keeper:
+#   mode: growth
+#
+# -----------------------------------------------------------------------------
+# CONSERVATION MODE (mature project)
+# -----------------------------------------------------------------------------
+# Use when: Project is stable, in maintenance, or preparing for handoff
+# Behavior:
+#   - New seeds almost always rejected
+#   - Focus on stability over new features
+#   - Extensions require strong justification
+# When to transition: Rarely - only if major refactor or pivot needed
+#
+# keeper:
+#   mode: conservation
+#
+# =============================================================================
+
+# =============================================================================
+# DECISION RULES
+# =============================================================================
+# The Keeper uses a deterministic decision matrix (spec sections 3A-3D).
+# Key principles (from spec section 5):
+#   - "Prefer reuse over extension."
+#   - "Prefer extension over creation."
+#   - "Reject if uncertain."
+#   - "You are accountable for long-term system coherence."
+
+# =============================================================================
+# SEED VAULT LOCATIONS
+# =============================================================================
+# The Keeper references these registries for decision-making:
+
+seed_vault:
+  frontend: seeds/frontend.yaml
+  backend: seeds/backend.yaml
+  data: seeds/data.yaml
+  auth: seeds/auth.yaml
+
+# =============================================================================
+# DECISIONS OUTPUT
+# =============================================================================
+# Keeper decisions are written to the decisions/ directory.
+# Each decision is immutable input for convoys.
+
+decisions_dir: decisions/
+
+# =============================================================================
+# GREAT SEED VAULT (optional)
+# =============================================================================
+# Cross-rig pattern sharing. Read-only, advisory.
+# Located at: /gastown/great-seeds/
+# The Keeper may import from it but is not forced to.
+
+# great_seeds:
+#   enabled: false
+#   import_from: /gastown/great-seeds/
