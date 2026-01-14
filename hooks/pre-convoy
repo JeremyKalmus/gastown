@@ -1,8 +1,11 @@
 #!/bin/bash
 # hooks/pre-convoy - Pre-convoy gate hook for Keeper of the Seeds
 #
-# This hook gates convoy creation by checking for keeper_decision approval.
-# Exit 0 to allow convoy creation, non-zero to block.
+# This hook gates convoy creation by:
+# 1. Reading the convoy spec (GT_CONVOY_SPEC)
+# 2. Loading the seed vault for pattern matching
+# 3. Checking for existing keeper_decision or generating ADR template
+# 4. Outputting keeper_result YAML with bead_frontmatter
 #
 # Usage:
 #   Called by `gt convoy create` before creating a convoy.
@@ -10,190 +13,425 @@
 #
 # Environment variables (set by gt convoy create):
 #   GT_CONVOY_NAME     - Name of the convoy being created
+#   GT_CONVOY_SPEC     - Spec/description of work to be done
 #   GT_CONVOY_ISSUES   - Space-separated list of issue IDs to track
 #   GT_RIG_ROOT        - Path to the rig root directory
 #   GT_TOWN_ROOT       - Path to the town root directory
+#   GT_KEEPER_DECISION - Optional: explicit path to keeper_decision file
 #
 # Exit codes:
-#   0 - Convoy creation approved
-#   1 - No keeper_decision found (gate blocked)
+#   0 - Convoy creation approved (outputs keeper_result YAML)
+#   1 - No keeper_decision found, ADR generated (needs review)
 #   2 - Keeper decision status is not 'approved'
 #   3 - Invalid or unparseable keeper_decision
+#
+# Output:
+#   On success (exit 0), outputs keeper_result YAML to stdout:
+#     keeper_result:
+#       status: approved
+#       decision_file: "path/to/adr.yaml"
+#       bead_frontmatter:
+#         keeper: "ADR-NNN"
+#         constraints: [...]
 #
 # The Keeper of the Seeds must approve work before polecats are unleashed.
 # "No Keeper, no convoy. No seeds, no Keeper." - keeper-spec.md
 
 set -euo pipefail
 
-# Configuration
-DECISION_FILE="${GT_KEEPER_DECISION:-keeper_decision.yaml}"
-DECISIONS_DIR="${GT_RIG_ROOT:-$(pwd)}/decisions"
+# =============================================================================
+# SETUP
+# =============================================================================
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+# Determine script location and load library
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KEEPER_ROOT="${SCRIPT_DIR}/.."
+
+# Source shared library
+if [[ -f "${KEEPER_ROOT}/lib/keeper-review.sh" ]]; then
+    source "${KEEPER_ROOT}/lib/keeper-review.sh"
+else
+    # Fallback colors and logging if library not found
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    NC='\033[0m'
+
+    keeper_log_error() { echo -e "${RED}[pre-convoy] ERROR: $1${NC}" >&2; }
+    keeper_log_warn() { echo -e "${YELLOW}[pre-convoy] WARNING: $1${NC}" >&2; }
+    keeper_log_success() { echo -e "${GREEN}[pre-convoy] $1${NC}"; }
+    keeper_log_info() { echo "[pre-convoy] $1"; }
+fi
+
+# Configuration
+DECISIONS_DIR="${KEEPER_ROOT}/decisions"
+KEEPER_CONFIG="${KEEPER_ROOT}/keeper/keeper.yaml"
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
 
 log_error() {
-    echo -e "${RED}[pre-convoy] ERROR: $1${NC}" >&2
+    keeper_log_error "$1"
 }
 
 log_warn() {
-    echo -e "${YELLOW}[pre-convoy] WARNING: $1${NC}" >&2
+    keeper_log_warn "$1"
 }
 
 log_success() {
-    echo -e "${GREEN}[pre-convoy] $1${NC}"
+    keeper_log_success "$1"
 }
 
 log_info() {
-    echo "[pre-convoy] $1"
-}
-
-# Find the keeper_decision file
-find_decision_file() {
-    local search_paths=(
-        # 1. Explicit path from environment
-        "${GT_KEEPER_DECISION:-}"
-        # 2. Current directory
-        "${DECISION_FILE}"
-        # 3. Rig decisions directory
-        "${DECISIONS_DIR}/${DECISION_FILE}"
-        "${DECISIONS_DIR}/latest.yaml"
-        # 4. Rig root
-        "${GT_RIG_ROOT:-$(pwd)}/${DECISION_FILE}"
-        "${GT_RIG_ROOT:-$(pwd)}/keeper_decision.yaml"
-    )
-
-    for path in "${search_paths[@]}"; do
-        if [[ -n "$path" && -f "$path" ]]; then
-            echo "$path"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-# Parse YAML and extract status (simple grep-based, no external deps)
-# Expects format:
-#   keeper_decision:
-#     status: approved
-#
-# Or simpler:
-#   status: approved
-parse_decision_status() {
-    local file="$1"
-    local status
-
-    # Try to extract status from YAML
-    # Handle both "status: value" and "  status: value" (indented)
-    status=$(grep -E '^\s*status:\s*' "$file" | head -1 | sed 's/.*status:\s*//' | tr -d '[:space:]"'"'" | tr '[:upper:]' '[:lower:]')
-
-    if [[ -z "$status" ]]; then
-        return 1
-    fi
-
-    echo "$status"
-    return 0
+    keeper_log_info "$1"
 }
 
 # Check if keeper is in seeding mode (bypass strict checks)
 check_keeper_mode() {
-    local keeper_config="${GT_RIG_ROOT:-$(pwd)}/keeper.yaml"
-
-    if [[ -f "$keeper_config" ]]; then
-        local mode
-        mode=$(grep -E '^\s*mode:\s*' "$keeper_config" 2>/dev/null | head -1 | sed 's/.*mode:\s*//' | tr -d '[:space:]"'"'" | tr '[:upper:]' '[:lower:]')
-        echo "${mode:-growth}"
+    if type keeper_get_mode &>/dev/null; then
+        keeper_get_mode
     else
-        echo "growth"
+        local config_file="${KEEPER_CONFIG}"
+        if [[ -f "$config_file" ]]; then
+            local mode
+            mode=$(grep -E '^\s*mode:\s*' "$config_file" 2>/dev/null | head -1 | sed 's/.*mode:\s*//' | tr -d '[:space:]"'"'" | tr '[:upper:]' '[:lower:]')
+            echo "${mode:-growth}"
+        else
+            echo "growth"
+        fi
     fi
 }
 
-# Main gate logic
+# Find the keeper_decision file
+find_decision_file() {
+    if type keeper_find_decision &>/dev/null; then
+        keeper_find_decision "$@"
+    else
+        local search_paths=(
+            "${GT_KEEPER_DECISION:-}"
+            "${DECISIONS_DIR}/keeper_decision.yaml"
+            "${DECISIONS_DIR}/latest.yaml"
+            "${KEEPER_ROOT}/keeper_decision.yaml"
+        )
+
+        for path in "${search_paths[@]}"; do
+            if [[ -n "$path" && -f "$path" ]]; then
+                echo "$path"
+                return 0
+            fi
+        done
+
+        return 1
+    fi
+}
+
+# Parse YAML and extract status
+parse_decision_status() {
+    local file="$1"
+    if type keeper_parse_decision_status &>/dev/null; then
+        keeper_parse_decision_status "$file"
+    else
+        local status
+        status=$(grep -E '^\s*status:\s*' "$file" | head -1 | sed 's/.*status:\s*//' | tr -d '[:space:]"'"'" | tr '[:upper:]' '[:lower:]')
+        echo "${status:-unknown}"
+    fi
+}
+
+# Parse ADR ID from decision file
+parse_decision_id() {
+    local file="$1"
+    if type keeper_parse_decision_id &>/dev/null; then
+        keeper_parse_decision_id "$file"
+    else
+        local adr_id
+        adr_id=$(grep -E '^\s*id:\s*' "$file" | head -1 | sed 's/.*id:\s*//' | tr -d '[:space:]"'"'")
+        echo "$adr_id"
+    fi
+}
+
+# Parse constraints from decision file
+parse_decision_constraints() {
+    local file="$1"
+    if type keeper_parse_decision_constraints &>/dev/null; then
+        keeper_parse_decision_constraints "$file"
+    else
+        awk '/^  constraints:$/,/^  [a-z]+:$/' "$file" 2>/dev/null | grep -E '^\s*-\s*' | sed 's/^\s*-\s*//' || true
+    fi
+}
+
+# Generate new ADR from template
+generate_adr() {
+    local spec_ref="$1"
+    if type keeper_generate_adr &>/dev/null; then
+        keeper_generate_adr "$spec_ref"
+    else
+        mkdir -p "$DECISIONS_DIR"
+
+        local adr_num
+        local last_num
+        last_num=$(ls "$DECISIONS_DIR" 2>/dev/null | grep -E '^[0-9]+' | sort -n | tail -1 | grep -oE '^[0-9]+' || echo "0")
+        adr_num=$(printf "%03d" $((10#${last_num:-0} + 1)))
+
+        local adr_id="ADR-${adr_num}"
+        local today
+        today=$(date +%Y-%m-%d)
+        local mode
+        mode=$(check_keeper_mode)
+
+        local short_name
+        short_name=$(echo "$spec_ref" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | cut -c1-30 | sed 's/-*$//')
+        local output_file="${DECISIONS_DIR}/${adr_num}-${short_name:-pending}.yaml"
+
+        cat > "$output_file" << EOF
+keeper_decision:
+  id: ${adr_id}
+  date: ${today}
+  spec: "${spec_ref}"
+  mode: ${mode}
+  status: pending
+  reuse:
+    frontend: []
+    backend: []
+    data: []
+    auth: []
+  extensions: {}
+  new_seeds: []
+  forbidden: []
+  constraints: []
+  rationale: |
+    Pending review by Keeper of the Seeds.
+
+    Run /keeper-review to evaluate this spec against the seed vault.
+
+bead_frontmatter:
+  keeper: "${adr_id}"
+  constraints: []
+EOF
+
+        echo "$output_file"
+    fi
+}
+
+# Output keeper_result YAML
+output_keeper_result() {
+    local status="$1"
+    local decision_file="$2"
+    local message="${3:-}"
+
+    local adr_id=""
+    local constraints_yaml="[]"
+
+    if [[ -f "$decision_file" ]]; then
+        adr_id=$(parse_decision_id "$decision_file")
+        local constraints
+        constraints=$(parse_decision_constraints "$decision_file" | head -5)
+        if [[ -n "$constraints" ]]; then
+            constraints_yaml=""
+            while IFS= read -r line; do
+                if [[ -n "$line" ]]; then
+                    constraints_yaml="${constraints_yaml}
+      - \"${line}\""
+                fi
+            done <<< "$constraints"
+        fi
+    fi
+
+    cat << EOF
+keeper_result:
+  status: ${status}
+  decision_file: "${decision_file}"
+  bead_frontmatter:
+    keeper: "${adr_id}"
+    constraints:${constraints_yaml:-
+      []}
+  message: |
+    ${message:-Decision status: $status}
+EOF
+}
+
+# Analyze spec for categories (heuristic)
+analyze_spec_categories() {
+    local spec="$1"
+    local categories=""
+
+    if echo "$spec" | grep -qiE 'component|button|modal|form|ui|view|page|screen'; then
+        categories="${categories}frontend "
+    fi
+    if echo "$spec" | grep -qiE 'api|route|endpoint|service|controller|handler'; then
+        categories="${categories}backend "
+    fi
+    if echo "$spec" | grep -qiE 'database|schema|table|enum|field|migration'; then
+        categories="${categories}data "
+    fi
+    if echo "$spec" | grep -qiE 'auth|login|logout|permission|scope|role|token'; then
+        categories="${categories}auth "
+    fi
+
+    echo "${categories:-general}"
+}
+
+# =============================================================================
+# MAIN LOGIC
+# =============================================================================
+
 main() {
-    log_info "Checking Keeper of the Seeds approval..."
+    log_info "Keeper of the Seeds pre-convoy gate..."
+
+    # Get convoy info
+    local convoy_name="${GT_CONVOY_NAME:-unnamed}"
+    local convoy_spec="${GT_CONVOY_SPEC:-}"
+
+    log_info "Convoy: $convoy_name"
 
     # Check keeper mode
     local keeper_mode
     keeper_mode=$(check_keeper_mode)
+    log_info "Keeper mode: $keeper_mode"
 
-    if [[ "$keeper_mode" == "seeding" ]]; then
-        log_warn "Keeper in SEEDING mode - convoy creation allowed without explicit approval"
-        log_success "Convoy gate PASSED (seeding mode bypass)"
-        exit 0
+    # Step 1: Check for existing decision
+    local decision_file
+    if decision_file=$(find_decision_file 2>/dev/null); then
+        log_info "Found decision file: $decision_file"
+
+        # Parse status
+        local status
+        status=$(parse_decision_status "$decision_file")
+        log_info "Keeper decision status: $status"
+
+        # Handle status
+        case "$status" in
+            approved)
+                log_success "Convoy gate PASSED - Keeper has approved this work"
+
+                # Output keeper_result for convoy to use
+                output_keeper_result "approved" "$decision_file" \
+                    "Work approved by Keeper. Polecats should include bead_frontmatter in all implementation beads."
+
+                exit 0
+                ;;
+            rejected)
+                log_error "Convoy gate BLOCKED - Keeper has REJECTED this work"
+                log_info "Review the keeper_decision for rejection reason."
+
+                output_keeper_result "rejected" "$decision_file" \
+                    "Work rejected by Keeper. See decision file for details."
+
+                exit 2
+                ;;
+            deferred)
+                log_error "Convoy gate BLOCKED - Keeper decision is DEFERRED"
+                log_info "Work requires further review before convoy can launch."
+
+                output_keeper_result "deferred" "$decision_file" \
+                    "Decision deferred. Run /keeper-review to complete evaluation."
+
+                exit 2
+                ;;
+            pending)
+                log_warn "Keeper decision is PENDING review"
+                log_info "Run /keeper-review to complete the evaluation."
+
+                if [[ "$keeper_mode" == "seeding" ]]; then
+                    log_warn "Seeding mode: allowing pending decision"
+                    output_keeper_result "pending" "$decision_file" \
+                        "Decision pending but allowed in seeding mode."
+                    exit 0
+                fi
+
+                output_keeper_result "pending" "$decision_file" \
+                    "Decision pending. Run /keeper-review to evaluate."
+
+                exit 1
+                ;;
+            *)
+                log_error "Unknown keeper_decision status: $status"
+                exit 3
+                ;;
+        esac
     fi
 
-    # Find decision file
-    local decision_file
-    if ! decision_file=$(find_decision_file); then
-        log_error "No keeper_decision found!"
-        log_info "The Keeper of the Seeds must approve work before convoy creation."
+    # Step 2: No existing decision - analyze spec and generate ADR
+    log_warn "No keeper_decision found"
+
+    if [[ -z "$convoy_spec" ]]; then
+        log_error "No GT_CONVOY_SPEC provided and no existing decision"
         log_info ""
-        log_info "Expected locations:"
-        log_info "  - ${DECISIONS_DIR}/${DECISION_FILE}"
-        log_info "  - ${GT_RIG_ROOT:-$(pwd)}/keeper_decision.yaml"
-        log_info ""
-        log_info "Create a keeper_decision with:"
-        log_info "  keeper_decision:"
-        log_info "    status: approved"
-        log_info "    reuse: [...]"
+        log_info "To proceed, either:"
+        log_info "  1. Set GT_CONVOY_SPEC with the work description"
+        log_info "  2. Run /keeper-review <spec> to generate a decision"
+        log_info "  3. Create ${DECISIONS_DIR}/keeper_decision.yaml manually"
         exit 1
     fi
 
-    log_info "Found decision file: $decision_file"
+    # Analyze spec
+    local categories
+    categories=$(analyze_spec_categories "$convoy_spec")
+    log_info "Detected categories: $categories"
 
-    # Parse status
-    local status
-    if ! status=$(parse_decision_status "$decision_file"); then
-        log_error "Could not parse keeper_decision status from: $decision_file"
-        log_info "Expected format:"
-        log_info "  keeper_decision:"
-        log_info "    status: approved|rejected|deferred"
-        exit 3
+    # Generate ADR template
+    local spec_short
+    spec_short=$(echo "$convoy_spec" | head -c 50)
+    local adr_file
+    adr_file=$(generate_adr "$spec_short")
+
+    log_info "Generated ADR template: $adr_file"
+
+    # Load seeds for context (informational)
+    local seeds_dir
+    seeds_dir=$(keeper_get_seeds_dir 2>/dev/null || echo "${KEEPER_ROOT}/templates/seeds")
+    if [[ -d "$seeds_dir" ]]; then
+        local seed_count
+        seed_count=$(find "$seeds_dir" -name "*.yaml" 2>/dev/null | wc -l | tr -d ' ')
+        log_info "Seed vault contains $seed_count category files"
     fi
 
-    log_info "Keeper decision status: $status"
+    # Seeding mode bypass
+    if [[ "$keeper_mode" == "seeding" ]]; then
+        log_warn "SEEDING mode - generating ADR with pending status and allowing convoy"
+        log_success "Convoy gate PASSED (seeding mode bypass)"
 
-    # Check status
-    case "$status" in
-        approved)
-            log_success "Convoy gate PASSED - Keeper has approved this work"
-            exit 0
-            ;;
-        rejected)
-            log_error "Convoy gate BLOCKED - Keeper has REJECTED this work"
-            log_info "Review the keeper_decision for rejection reason."
-            exit 2
-            ;;
-        deferred)
-            log_error "Convoy gate BLOCKED - Keeper decision is DEFERRED"
-            log_info "Work requires further review before convoy can launch."
-            exit 2
-            ;;
-        *)
-            log_error "Unknown keeper_decision status: $status"
-            log_info "Valid statuses: approved, rejected, deferred"
-            exit 3
-            ;;
-    esac
+        output_keeper_result "pending" "$adr_file" \
+            "ADR generated in seeding mode. Review with /keeper-review when ready."
+
+        exit 0
+    fi
+
+    # Normal mode - require review
+    log_error "Convoy gate BLOCKED - ADR generated but requires review"
+    log_info ""
+    log_info "The Keeper has generated an ADR template:"
+    log_info "  $adr_file"
+    log_info ""
+    log_info "Next steps:"
+    log_info "  1. Run: /keeper-review \"$convoy_spec\""
+    log_info "  2. The Keeper will evaluate against the seed vault"
+    log_info "  3. Once status is 'approved', convoy can launch"
+    log_info ""
+
+    output_keeper_result "pending" "$adr_file" \
+        "ADR generated. Run /keeper-review to complete evaluation."
+
+    exit 1
 }
 
-# Support --help flag
+# =============================================================================
+# HELP
+# =============================================================================
+
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
     cat << 'EOF'
 pre-convoy - Keeper of the Seeds gate hook
 
-This hook gates convoy creation by checking for keeper_decision approval.
-It enforces the rule: "No Keeper, no convoy."
+This hook gates convoy creation by performing keeper review and outputting
+bead frontmatter for implementation tracking.
 
 USAGE:
     hooks/pre-convoy [--help]
 
 ENVIRONMENT VARIABLES:
     GT_CONVOY_NAME      Name of the convoy being created
+    GT_CONVOY_SPEC      Spec/description of the work (triggers ADR generation)
     GT_CONVOY_ISSUES    Space-separated list of issue IDs
     GT_RIG_ROOT         Path to the rig root directory
     GT_TOWN_ROOT        Path to the town root directory
@@ -201,40 +439,50 @@ ENVIRONMENT VARIABLES:
 
 EXIT CODES:
     0 - Approved (convoy may proceed)
-    1 - No decision found (blocked)
+    1 - No decision / pending (blocked, ADR generated)
     2 - Decision status not approved (blocked)
     3 - Parse error (blocked)
 
-DECISION FILE FORMAT:
-    keeper_decision:
+OUTPUT FORMAT (on exit 0):
+    keeper_result:
       status: approved
-      reuse:
-        frontend:
-          - Button.primary
-        backend:
-          - AuthService
-      extensions: [...]
-      new_seeds: [...]
-      forbidden: [...]
+      decision_file: "decisions/001-feature-name.yaml"
+      bead_frontmatter:
+        keeper: "ADR-001"
+        constraints:
+          - "MUST use Button.primary"
+          - "MUST NOT create new modals"
+      message: |
+        Work approved by Keeper.
+
+SEED VAULT:
+    The hook loads seed patterns from:
+    - keeper/seeds/*.yaml (rig-specific seeds)
+    - templates/seeds/*.yaml (template seeds)
+
+    Categories: frontend, backend, data, auth, config, testing
 
 KEEPER MODES:
-    seeding     - Early project: bypasses strict approval
-    growth      - Default: requires approval
+    seeding      - Early project: generates ADR but allows convoy
+    growth       - Default: requires approved ADR
     conservation - Mature: very strict approval
 
-EXAMPLE INTEGRATION:
-    # In gt convoy create (pseudo-code):
-    export GT_CONVOY_NAME="$convoy_name"
-    export GT_CONVOY_ISSUES="$issues"
-    export GT_RIG_ROOT="$rig_root"
+EXAMPLE:
+    # Typical convoy creation flow:
+    export GT_CONVOY_NAME="add-dashboard"
+    export GT_CONVOY_SPEC="Add user dashboard with usage metrics chart"
 
-    if ! hooks/pre-convoy; then
-        echo "Convoy blocked by Keeper gate"
-        exit 1
+    if output=$(hooks/pre-convoy); then
+        echo "Approved! Bead frontmatter:"
+        echo "$output" | grep -A5 "bead_frontmatter"
+    else
+        echo "Blocked. Run /keeper-review to get approval."
     fi
 
 SEE ALSO:
-    keeper-spec.md - Full Keeper of the Seeds specification
+    /keeper-review  - Evaluate spec against seed vault
+    /keeper-validate - Validate polecat changes against ADR
+    keeper-spec.md  - Full Keeper specification
 EOF
     exit 0
 fi

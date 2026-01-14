@@ -1,0 +1,84 @@
+# Keeper ADR (Architectural Decision Record) Template
+#
+# This template is used by the pre-convoy hook to generate keeper decisions.
+# Each ADR captures what patterns to reuse, extend, or create for a feature.
+#
+# Reference: keeper-spec.md
+
+keeper_decision:
+  # Unique identifier for this decision
+  id: ADR-{NNN}
+
+  # Date decision was made
+  date: "{DATE}"
+
+  # Reference to the spec/proposal being reviewed
+  spec: "{SPEC_REFERENCE}"
+
+  # Keeper mode at time of decision
+  mode: growth  # seeding | growth | conservation
+
+  # Decision status - this gates convoy creation
+  status: pending  # approved | rejected | deferred
+
+  # Existing patterns to reuse (MUST use these)
+  reuse:
+    frontend: []
+      # - Button.primary
+      # - Modal
+    backend: []
+      # - POST /auth/login
+      # - AuthService
+    data: []
+      # - enum:user_status
+    auth: []
+      # - scope:user:read
+
+  # Approved modifications to existing patterns
+  extensions:
+    # frontend:
+    #   Button:
+    #     add_variant: "warning"
+    # backend:
+    #   "GET /users/:id":
+    #     add_field: "last_login"
+    # data:
+    #   user_status:
+    #     add_value: "pending"
+
+  # New patterns approved (rare - requires justification)
+  new_seeds: []
+    # - type: enum
+    #   name: feature_state
+    #   scope: table:features
+    #   justification: "No existing enum covers feature lifecycle"
+
+  # Patterns explicitly prohibited for this work
+  forbidden: []
+    # - new auth services
+    # - new modal implementations
+    # - custom color values
+
+  # Specific constraints polecats must follow
+  constraints: []
+    # - MUST use Button.primary for all action buttons
+    # - MUST NOT create new validation schemas
+    # - MUST extend UserService, not create new service
+
+  # Explanation of the decision
+  rationale: |
+    {RATIONALE}
+
+# Bead frontmatter - injected into implementation beads
+bead_frontmatter:
+  keeper: "{ADR_ID}"
+  constraints: []
+    # Key constraints copied here for polecat visibility
+
+# Validation record - appended after polecat work is reviewed
+# validation:
+#   date: YYYY-MM-DD
+#   branch: feature-branch
+#   result: approved | rejected
+#   violations: 0
+#   validated_by: refinery
