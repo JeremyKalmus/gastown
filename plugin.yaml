@@ -42,7 +42,6 @@ install:
     - keeper/seeds/config.yaml
     - keeper/seeds/testing.yaml
     - keeper/decisions/
-    - keeper/hooks/keeper-gate.sh
     - keeper/KEEPER-INSTRUCTIONS.md
 
   # Slash commands installed

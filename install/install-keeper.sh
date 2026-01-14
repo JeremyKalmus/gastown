@@ -247,67 +247,6 @@ if [[ "$SKIP_MAYOR" != true ]]; then
     else
         print_warning "Mayor .claude directory not found, skipping Mayor commands"
     fi
-
-    # Install the enforcement hook (PreToolUse)
-    if [[ -n "$MAYOR_CLAUDE" ]]; then
-        print_info "Installing Keeper enforcement hook..."
-
-        # Copy the hook script
-        mkdir -p "$RIG_PATH/keeper/hooks"
-        cp "$SCRIPT_DIR/hooks/keeper-gate.sh" "$RIG_PATH/keeper/hooks/"
-        chmod +x "$RIG_PATH/keeper/hooks/keeper-gate.sh"
-
-        # Add PreToolUse hook to Mayor's settings.json
-        MAYOR_SETTINGS="$MAYOR_CLAUDE/settings.json"
-        HOOK_CMD="$RIG_PATH/keeper/hooks/keeper-gate.sh"
-
-        if [[ -f "$MAYOR_SETTINGS" ]]; then
-            # Check if jq is available
-            if command -v jq &> /dev/null; then
-                # Check if PreToolUse hook already exists for keeper
-                if ! grep -q "keeper-gate.sh" "$MAYOR_SETTINGS" 2>/dev/null; then
-                    # Add the hook using jq
-                    TEMP_FILE=$(mktemp)
-                    jq --arg cmd "$HOOK_CMD" '
-                        .hooks.PreToolUse = (.hooks.PreToolUse // []) + [{
-                            "matcher": "Bash",
-                            "hooks": [{
-                                "type": "command",
-                                "command": $cmd
-                            }]
-                        }]
-                    ' "$MAYOR_SETTINGS" > "$TEMP_FILE" && mv "$TEMP_FILE" "$MAYOR_SETTINGS"
-                    print_success "Added Keeper enforcement hook to Mayor"
-                else
-                    print_warning "Keeper hook already in Mayor settings"
-                fi
-            else
-                print_warning "jq not found - manual hook setup required"
-                print_warning "Add PreToolUse hook to $MAYOR_SETTINGS:"
-                echo "  Command: $HOOK_CMD"
-            fi
-        else
-            # Create new settings.json with the hook
-            cat > "$MAYOR_SETTINGS" << HOOKEOF
-{
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$HOOK_CMD"
-          }
-        ]
-      }
-    ]
-  }
-}
-HOOKEOF
-            print_success "Created Mayor settings.json with Keeper hook"
-        fi
-    fi
 fi
 
 # Step 5: Install Refinery slash commands
@@ -415,8 +354,6 @@ echo "  │   ├── auth.yaml      # Auth patterns, scopes, roles"
 echo "  │   ├── config.yaml    # Feature flags, environment config"
 echo "  │   └── testing.yaml   # Test fixtures, mocks, utilities"
 echo "  ├── decisions/         # ADR storage"
-echo "  ├── hooks/"
-echo "  │   └── keeper-gate.sh # Enforcement hook (blocks unauthorized beads)"
 echo "  └── KEEPER-INSTRUCTIONS.md"
 echo ""
 echo "Next steps:"
@@ -428,8 +365,4 @@ echo "Commands available:"
 echo "  /keeper-plant             # Discover existing patterns (run once after install)"
 echo "  /keeper-review <spec>     # Review spec before creating beads"
 echo "  /keeper-validate <adr>    # Validate changes before merge"
-echo ""
-echo -e "${YELLOW}ENFORCEMENT ACTIVE:${NC}"
-echo "  Mayor cannot run 'bd create' or 'gt convoy create' without"
-echo "  an approved keeper_decision in keeper/decisions/"
 echo ""

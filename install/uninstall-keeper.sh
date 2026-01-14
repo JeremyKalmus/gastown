@@ -115,23 +115,9 @@ for dir in "$TOWN_ROOT/mayor/.claude/commands" "$RIG_PATH/mayor/rig/.claude/comm
         rm "$dir/keeper-review.md"
         print_success "Removed keeper-review.md from Mayor"
     fi
-done
-
-# Remove enforcement hook from Mayor's settings.json
-print_info "Removing Keeper enforcement hook..."
-for settings_file in "$TOWN_ROOT/mayor/.claude/settings.json" "$RIG_PATH/mayor/rig/.claude/settings.json"; do
-    if [[ -f "$settings_file" ]] && grep -q "keeper-gate.sh" "$settings_file" 2>/dev/null; then
-        if command -v jq &> /dev/null; then
-            # Remove the keeper hook using jq
-            TEMP_FILE=$(mktemp)
-            jq '
-                .hooks.PreToolUse = [.hooks.PreToolUse[] | select(.hooks[0].command | contains("keeper-gate") | not)]
-            ' "$settings_file" > "$TEMP_FILE" && mv "$TEMP_FILE" "$settings_file"
-            print_success "Removed Keeper hook from Mayor settings"
-        else
-            print_warning "jq not found - manually remove keeper-gate.sh hook from:"
-            echo "  $settings_file"
-        fi
+    if [[ -f "$dir/keeper-plant.md" ]]; then
+        rm "$dir/keeper-plant.md"
+        print_success "Removed keeper-plant.md from Mayor"
     fi
 done
 
@@ -172,12 +158,6 @@ if [[ -d "$RIG_PATH/keeper" ]]; then
         print_success "Removed decisions/"
     elif [[ "$KEEP_DECISIONS" == true ]]; then
         print_warning "Keeping decisions/ (--keep-decisions)"
-    fi
-
-    # Hooks
-    if [[ -d "$RIG_PATH/keeper/hooks" ]]; then
-        rm -rf "$RIG_PATH/keeper/hooks"
-        print_success "Removed hooks/"
     fi
 
     # Config and instructions
